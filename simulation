@@ -1,0 +1,190 @@
+import random
+import numpy as np
+import pandas as pd
+
+# Constants
+SEED = 42
+NUM_AGENTS = 1000
+SIM_DAYS = 31
+CYCLES_PER_DAY = 3
+TOTAL_CYCLES = SIM_DAYS * CYCLES_PER_DAY
+
+MOTIVES = ['Amusement', 'Ego-Boost', 'Affair', 'Relationship']
+GENDERS = ['Male', 'Female']
+HAIR_COLORS = ['Blonde', 'Brown', 'Black', 'Red', 'Other']
+EYE_COLORS = ['Blue', 'Brown', 'Green', 'Gray', 'Other']
+
+class Agent:
+    def __init__(self, agent_id, gender, motive, is_fake=False):
+        #Personal attributes
+        self.id = agent_id
+        self.gender = gender
+        self.motive = motive
+        self.is_fake = is_fake
+        self.hair_color = random.choice(HAIR_COLORS)
+        self.eye_color = random.choice(EYE_COLORS)
+        self.has_social_media = (random.random() < 0.3)
+
+        # Dynamic attributes
+        self.elo_score = np.clip(np.random.normal(0.5, 0.15), 0, 1)  # Normal distribution with mean=0.5, std=0.15
+        self.expected_happiness = 0.5
+        self.pickiness = np.clip(np.random.normal(0.1, 0.05), 0, 1)  # Pickiness level search for Litearture
+        self.pref_hair_weight = random.random()
+        self.pref_eye_weight = random.random()
+
+        # Interaction trackers
+        self.likes_given = 0
+        self.matches = set()
+        self.messages_sent = 0
+
+    def like_probability(self, other, bonus_elo=True):
+        p_base = (self.pickiness + self.pref_hair_weight + self.pref_eye_weight) / 3
+        if self.hair_color == other.hair_color:
+            p_base += self.pref_hair_weight / 2
+        if self.eye_color == other.eye_color:
+            p_base += self.pref_eye_weight / 2
+
+        bonus = 0
+        if bonus_elo and other.elo_score >= self.elo_score - 0.1:
+            bonus += 0.1
+        if other.has_social_media:
+            bonus += 0.05
+
+        return np.clip(p_base + bonus, 0, 1)
+
+    def send_message_probability(self):
+        return 0.5 if self.motive in ['Affair', 'Relationship'] else 0.2
+
+
+class Simulation:
+    def __init__(self, use_preferred=False, use_elo=False,
+                 include_fake=False, include_ads=False):
+        self.use_preferred = use_preferred
+        self.use_elo = use_elo
+        self.include_fake = include_fake
+        self.include_ads = include_ads
+
+        # Initialize agents
+        self.agents = []
+        for i in range(NUM_AGENTS):
+            gender = GENDERS[i % 2]
+            motive = random.choice(MOTIVES)
+            self.agents.append(Agent(i, gender, motive))
+
+        # Zero-out preference weights in non-preferred scenario
+        if not use_preferred:
+            for agent in self.agents:
+                agent.pref_hair_weight = 0.0
+                agent.pref_eye_weight = 0.0
+
+        # Add fake profiles if flagged
+        if include_fake:
+            for i in range(50):
+                gender = random.choice(GENDERS)
+                motive = random.choice(MOTIVES)
+                self.agents.append(
+                    Agent(NUM_AGENTS + i, gender, motive, is_fake=True)
+                )
+
+        # Interaction logs
+        self.likes = []
+        self.matches = []
+        self.proposals = 0  # count all proposal attempts
+
+    def run(self):
+        for _ in range(TOTAL_CYCLES):
+            random.shuffle(self.agents)
+            for agent in self.agents:
+                # Randomly choose online presence
+                if random.random() > 0.5:
+                    continue
+
+                # If already matched, send messages only
+                if agent.matches:
+                    for match_id in list(agent.matches):
+                        if random.random() < agent.send_message_probability():
+                            agent.messages_sent += 1
+                            agent.expected_happiness += 0.01
+                    continue
+
+                # Otherwise propose new candidate
+                candidates = [
+                    a for a in self.agents
+                    if a.gender != agent.gender and a.id != agent.id
+                ]
+
+                if self.use_preferred:
+                    liked_me = [a for a in self.agents if agent.id in a.matches]
+                    if liked_me and random.random() < 0.5:
+                        candidates = liked_me
+                    else:
+                        candidates = sorted(
+                            candidates,
+                            key=lambda x: abs(agent.elo_score - x.elo_score)
+                        )[:50]
+
+                candidate = random.choice(candidates)
+                self.proposals += 1  # count proposal
+
+                # Like and possible mutual-like
+                if random.random() < agent.like_probability(candidate, bonus_elo=self.use_elo):
+                    agent.likes_given += 1
+                    self.likes.append((agent.id, candidate.id))
+
+                    if random.random() < candidate.like_probability(agent, bonus_elo=self.use_elo):
+                        # Mutual match
+                        agent.matches.add(candidate.id)
+                        candidate.matches.add(agent.id)
+                        self.matches.append((agent.id, candidate.id))
+                        agent.expected_happiness += 0.02
+                        candidate.expected_happiness += 0.02
+                    else:
+                        agent.expected_happiness -= 0.005
+
+                # Ads reduce happiness only
+                if self.include_ads and random.random() < 0.1:
+                    agent.expected_happiness -= 0.01
+
+    def metrics(self):
+        total_matches = len(self.matches)
+        match_quote = (total_matches / self.proposals * 100) if self.proposals > 0 else 0
+        avg_happiness = np.mean([agent.expected_happiness for agent in self.agents]) * 100
+        return match_quote, avg_happiness
+
+
+def evaluate_scenarios_cv(seeds, scenarios):
+    results = []
+    for name, up, ue, ff, ads in scenarios:
+        match_quotes = []
+        happiness_scores = []
+        for seed_val in seeds:
+            random.seed(seed_val)
+            np.random.seed(seed_val)
+            sim = Simulation(use_preferred=up,
+                             use_elo=ue,
+                             include_fake=ff,
+                             include_ads=ads)
+            sim.run()
+            mq, eh = sim.metrics()
+            match_quotes.append(mq)
+            happiness_scores.append(eh)
+        results.append({
+            'Scenario': name,
+            'Match-Quote (%)': round(np.mean(match_quotes), 2),
+            'Expected Happiness (%)': round(np.mean(happiness_scores), 2)
+        })
+    return pd.DataFrame(results)
+
+
+if __name__ == "__main__":
+    scenarios = [
+        ('Random Proposing', False, False, False, False),
+        ('Preferred Proposing', True, False, False, False),
+        ('+ Elo-Score', True, True, False, False),
+        ('+ Fakeprofile', True, True, True, False),
+        ('+ Advertising', True, True, True, True),
+    ]
+    seeds = [SEED + i for i in range(1)]
+
+    df_cv = evaluate_scenarios_cv(seeds, scenarios)
+    print(df_cv)
