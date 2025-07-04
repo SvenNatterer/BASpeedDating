@@ -1,0 +1,53 @@
+```{r}
+library("dplyr")
+df <- read.csv("Data/Speed_Dating_Data.csv",
+               header = TRUE,
+               stringsAsFactors = TRUE)  # Zeichenketten nicht automatisch zu Faktoren machen
+
+
+# Fix Wave 6-9
+# 1. Liste der zu multiplizierenden Spalten
+cols <- c(
+  "attr4_1", "sinc4_1", "intel4_1", "fun4_1", "amb4_1", "shar4_1",
+  "attr4_3", "sinc4_3", "intel4_3", "fun4_3", "amb4_3", "shar4_3",
+  "attr2_3", "sinc2_3", "intel2_3", "fun2_3", "amb2_3", "shar2_3"
+)
+
+# 2. Maske für wave zwischen 6 und 9
+mask <- df$wave >= 6 & df$wave <= 9
+
+# 3. In-place Multiplikation dieser Spalten in den markierten Zeilen
+df[mask, cols] <- df[mask, cols] * 10
+
+# Entferne Spalten mit mehr als 5% Nas
+# 1. Für jede Spalte den Anteil an NAs berechnen
+na_frac <- colMeans(is.na(df))
+
+# 2. Nur die Spalten behalten, die ≤ 5 % NAs haben
+df <- df[ , na_frac <= 0.05]
+
+# Spalten löschen
+drop <- c('iid', 'id', 'idg', 'pid', "dec", "dec_o")
+df <- df %>% select(-all_of(drop))
+```
+
+```{r}
+set.seed(42)
+
+# 2. Angenommen dein DataFrame heißt 'df'
+n <- nrow(df)
+# 80 % der Zeilen zufällig auswählen
+train_idx <- sample(seq_len(n), size = floor(0.8 * n))
+
+# 3. Trainings- und Test-Sätze erzeugen
+train_df <- df[train_idx, ]
+test_df  <- df[-train_idx, ]
+```
+
+```{r}
+# jetzt klappt das Predict
+simple_lm <- lm(match ~ ., data = train_df)
+preds     <- predict(simple_lm, newdata = test_df)
+```
+
+
